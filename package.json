@@ -2,6 +2,17 @@
     "name": "actual-jev",
     "version": "0.1.0",
     "description": "Categorize Actual Budget transactions with TypeSafe Jev",
+    "author": "Alessandro Cifani <alessandro.cifani@gmail.com>",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/acifani/actual-jev.git"
+    },
+    "keywords": [
+        "actual",
+        "actual-budget",
+        "jev"
+    ],
     "type": "module",
     "packageManager": "pnpm@12.1.0",
     "engines": {
