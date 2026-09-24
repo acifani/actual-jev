@@ -85,7 +85,10 @@ void test('skips off-budget accounts before classifying ordinary or split transa
     const summary = await runCategorization(port, { mode: 'auto', threshold: 0.9 });
     assert.equal(summary.examined, 2);
     assert.deepEqual(classified, ['ordinary', 'child-1']);
-    assert.deepEqual(updates.map((update) => update.id), ['ordinary', 'child-1']);
+    assert.deepEqual(
+        updates.map((update) => update.id),
+        ['ordinary', 'child-1'],
+    );
     assert.equal(lines.length, 2);
 });
 

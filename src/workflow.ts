@@ -94,7 +94,9 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
     if (options.account && selectedAccounts.length !== 1) {
         throw new Error(`Account must match exactly one ID or name: ${options.account}`);
     }
-    const allowedAccounts = new Set(selectedAccounts.filter((account) => !account.offbudget).map((account) => account.id));
+    const allowedAccounts = new Set(
+        selectedAccounts.filter((account) => !account.offbudget).map((account) => account.id),
+    );
     const categoryById = new Map(port.categories.map((category) => [category.id, category]));
     const summary: RunSummary = { examined: 0, applied: 0, wouldApply: 0, skipped: 0, transfersSkipped: 0 };
 
