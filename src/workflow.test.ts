@@ -61,6 +61,34 @@ void test('automatic mode updates ordinary transactions and only eligible split 
     assert.equal(lines.filter((line) => /Decision\s+Applied/.test(line)).length, 2);
 });
 
+void test('skips off-budget accounts before classifying ordinary or split transactions', async () => {
+    const { port, updates, lines } = fixture();
+    port.accounts = [...port.accounts, { id: 'tracking', name: 'Tracking', offbudget: true }];
+    port.transactions = [
+        ...port.transactions,
+        { ...base, id: 'off-budget', account: 'tracking' },
+        {
+            ...base,
+            id: 'off-budget-split',
+            account: 'tracking',
+            is_parent: true,
+            subtransactions: [{ ...base, id: 'off-budget-child', account: 'tracking', is_child: true }],
+        },
+    ];
+    const classified: string[] = [];
+    const classify = port.classify.bind(port);
+    port.classify = (transaction) => {
+        classified.push(transaction.id);
+        return classify(transaction);
+    };
+
+    const summary = await runCategorization(port, { mode: 'auto', threshold: 0.9 });
+    assert.equal(summary.examined, 2);
+    assert.deepEqual(classified, ['ordinary', 'child-1']);
+    assert.deepEqual(updates.map((update) => update.id), ['ordinary', 'child-1']);
+    assert.equal(lines.length, 2);
+});
+
 void test('dry-run simulates auto without any writes', async () => {
     const { port, updates, lines } = fixture();
     const summary = await runCategorization(port, { mode: 'dry-run', threshold: 0.9 });

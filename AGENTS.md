@@ -6,3 +6,4 @@
 - Keep the `README.md` focused on end-user documentation. Keep it concise, useful, skimmable.
 - `AGENTS.md` should contain essential contributor knowledge that cannot be easily inferred.
 - Keep future plans and to-dos in `TODO.md`.
+- Actual API documentation: https://actualbudget.org/docs/api/reference

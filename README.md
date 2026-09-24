@@ -23,7 +23,7 @@ pnpm start --auto --threshold 0.9       # Apply high-confidence suggestions
 
 Dry-run does not change transactions. The confidence threshold defaults to `0.9` and can be set from `0` to `1` for dry-run and automatic mode. Only uncategorized transactions are considered; transfers are skipped.
 
-By default, all accounts and dates are scanned. Use `--account NAME_OR_ID`, `--from YYYY-MM-DD`, and `--to YYYY-MM-DD` to narrow the scan. Use `--data-dir PATH` to change the local Actual cache directory. Run `pnpm start --help` for all options.
+By default, on-budget accounts and all dates are scanned. Use `--account NAME_OR_ID`, `--from YYYY-MM-DD`, and `--to YYYY-MM-DD` to narrow the scan. Use `--data-dir PATH` to change the local Actual cache directory. Run `pnpm start --help` for all options.
 
 ## Use from code
 
