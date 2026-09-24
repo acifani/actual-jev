@@ -25,7 +25,7 @@ function fixture(confidence = 0.95) {
                 ],
             },
         ],
-        transferPayeeIds: new Set(['transfer-payee']),
+        transferPayeeAccountIds: new Map([['transfer-payee', 'checking']]),
         payeeNames: new Map([['shop', 'shop']]),
         categories: [category],
         classify() {
@@ -90,6 +90,30 @@ void test('skips off-budget accounts before classifying ordinary or split transa
         ['ordinary', 'child-1'],
     );
     assert.equal(lines.length, 2);
+});
+
+void test('categorizes on-budget transfers to off-budget accounts but skips their off-budget sides', async () => {
+    const { port, updates } = fixture();
+    port.accounts = [...port.accounts, { id: 'tracking', name: 'Tracking', offbudget: true }];
+    port.transferPayeeAccountIds = new Map([
+        ['transfer-payee', 'checking'],
+        ['tracking-payee', 'tracking'],
+    ]);
+    port.transactions = [
+        ...port.transactions,
+        { ...base, id: 'to-tracking', payee: 'tracking-payee', transfer_id: 'tracking-side' },
+        { ...base, id: 'tracking-side', account: 'tracking', transfer_id: 'to-tracking' },
+        { ...base, id: 'to-tracking-by-id', transfer_id: 'tracking-side-by-id' },
+        { ...base, id: 'tracking-side-by-id', account: 'tracking', transfer_id: 'to-tracking-by-id' },
+    ];
+
+    const summary = await runCategorization(port, { mode: 'auto', threshold: 0.9 });
+    assert.equal(summary.applied, 4);
+    assert.equal(summary.transfersSkipped, 1);
+    assert.deepEqual(
+        updates.map((update) => update.id),
+        ['ordinary', 'child-1', 'to-tracking', 'to-tracking-by-id'],
+    );
 });
 
 void test('dry-run simulates auto without any writes', async () => {

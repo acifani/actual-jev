@@ -118,13 +118,15 @@ async function main(): Promise<void> {
         ]);
         const transactions = (queryResult as { data?: ActualTransaction[] }).data;
         if (!Array.isArray(transactions)) throw new Error('ActualQL did not return transaction rows');
-        const transferPayeeIds = new Set(payees.filter((payee) => payee.transfer_acct).map((payee) => payee.id));
+        const transferPayeeAccountIds = new Map(
+            payees.flatMap((payee) => (payee.transfer_acct ? [[payee.id, payee.transfer_acct] as const] : [])),
+        );
         const categories = classifier.categories;
         const summary = await runCategorization(
             {
                 accounts,
                 transactions,
-                transferPayeeIds,
+                transferPayeeAccountIds,
                 payeeNames: new Map(payees.map((payee) => [payee.id, payee.name])),
                 categories,
                 classify: (transaction) => classifier.classify(transaction),

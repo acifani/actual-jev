@@ -24,7 +24,7 @@ export interface RunSummary {
 export interface WorkflowPort {
     accounts: readonly AccountInfo[];
     transactions: readonly ActualTransaction[];
-    transferPayeeIds: ReadonlySet<string>;
+    transferPayeeAccountIds: ReadonlyMap<string, string>;
     payeeNames?: ReadonlyMap<string, string>;
     categories: readonly CategoryCandidate[];
     classify(transaction: ActualTransaction & { accountName?: string }): Promise<Classification>;
@@ -38,8 +38,17 @@ function isUncategorized(transaction: ActualTransaction): boolean {
     return !transaction.category;
 }
 
-function isTransfer(transaction: ActualTransaction, transferPayeeIds: ReadonlySet<string>): boolean {
-    return Boolean(transaction.transfer_id || (transaction.payee && transferPayeeIds.has(transaction.payee)));
+function isSkippableTransfer(
+    transaction: ActualTransaction,
+    transferPayeeAccountIds: ReadonlyMap<string, string>,
+    accountById: ReadonlyMap<string, AccountInfo>,
+    transactionById: ReadonlyMap<string, ActualTransaction>,
+): boolean {
+    const targetAccountId =
+        (transaction.payee && transferPayeeAccountIds.get(transaction.payee)) ||
+        (transaction.transfer_id && transactionById.get(transaction.transfer_id)?.account);
+    if (targetAccountId && accountById.get(targetAccountId)?.offbudget) return false;
+    return Boolean(transaction.transfer_id || (transaction.payee && transferPayeeAccountIds.has(transaction.payee)));
 }
 
 function inRange(transaction: ActualTransaction, options: RunOptions): boolean {
@@ -97,6 +106,11 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
     const allowedAccounts = new Set(
         selectedAccounts.filter((account) => !account.offbudget).map((account) => account.id),
     );
+    const transactionById = new Map(
+        port.transactions
+            .flatMap((transaction) => [transaction, ...(transaction.subtransactions ?? [])])
+            .map((transaction) => [transaction.id, transaction]),
+    );
     const categoryById = new Map(port.categories.map((category) => [category.id, category]));
     const summary: RunSummary = { examined: 0, applied: 0, wouldApply: 0, skipped: 0, transfersSkipped: 0 };
 
@@ -147,7 +161,7 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
         if (!allowedAccounts.has(transaction.account)) continue;
         const accountName = accountById.get(transaction.account)?.name ?? transaction.account;
         if (transaction.subtransactions?.length) {
-            if (isTransfer(transaction, port.transferPayeeIds)) {
+            if (isSkippableTransfer(transaction, port.transferPayeeAccountIds, accountById, transactionById)) {
                 summary.transfersSkipped += transaction.subtransactions.filter(
                     (child) => isUncategorized(child) && inRange(child, options),
                 ).length;
@@ -155,7 +169,7 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
             }
             for (const child of transaction.subtransactions) {
                 if (!isUncategorized(child) || !inRange(child, options)) continue;
-                if (isTransfer(child, port.transferPayeeIds)) {
+                if (isSkippableTransfer(child, port.transferPayeeAccountIds, accountById, transactionById)) {
                     summary.transfersSkipped++;
                     continue;
                 }
@@ -172,7 +186,7 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
             continue;
         }
         if (transaction.is_child || !isUncategorized(transaction) || !inRange(transaction, options)) continue;
-        if (isTransfer(transaction, port.transferPayeeIds)) {
+        if (isSkippableTransfer(transaction, port.transferPayeeAccountIds, accountById, transactionById)) {
             summary.transfersSkipped++;
             continue;
         }
