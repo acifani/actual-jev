@@ -1,4 +1,4 @@
-import { choice, TypeSafeClient, type JsonValue } from '@typesafe-ai/sdk';
+import { choice, type EntryType } from '@typesafe-ai/sdk';
 
 export interface CategoryCandidate {
     id: string;
@@ -37,7 +37,7 @@ export interface Classification {
 
 export interface JevChoiceClient {
     systemOne(request: {
-        state: JsonValue;
+        state: EntryType;
         model: string;
         questions: { category: ReturnType<typeof choice> };
     }): Promise<{
@@ -169,7 +169,7 @@ export async function classifyTransaction(
     criteria[NO_MATCH] = 'No listed category reasonably describes this transaction';
 
     const examples = relevantExamples(transaction, options.examples ?? [], seen, maxExamplesPerCategory);
-    const state: JsonValue = {
+    const state: EntryType = {
         transaction: {
             payee: transaction.payeeName ?? null,
             imported_payee: transaction.importedPayee ?? null,
@@ -187,7 +187,8 @@ export async function classifyTransaction(
             category: optionById.get(example.categoryId)!,
         })),
     };
-    const client = options.client ?? new TypeSafeClient();
+    const client = options.client;
+    if (!client) throw new TypeError('A configured Jev client is required');
     const response = await client.systemOne({
         model: options.model ?? 'jev-latest',
         state,

@@ -1,4 +1,3 @@
-export { classifyTransaction } from './classifier.js';
 export type {
     CategoryCandidate,
     CategorizedExample,
@@ -6,13 +5,6 @@ export type {
     RankedCategory,
     Classification,
     JevChoiceClient,
-    ClassifierOptions,
 } from './classifier.js';
-export { createActualClassifier } from './actual.js';
-export type {
-    ActualClient,
-    ActualClassifier,
-    ActualClassifierOptions,
-    ActualTransaction,
-    ActualTransactionInput,
-} from './actual.js';
+export { ActualJev } from './actual.js';
+export type { ActualDataClient, ActualJevConfig, ActualTransaction, ActualTransactionInput } from './actual.js';

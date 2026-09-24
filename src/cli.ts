@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as actual from '@actual-app/api';
+import { TypeSafeClient } from '@typesafe-ai/sdk';
 import search from '@inquirer/search';
 import { stdin, stdout } from 'node:process';
 import { mkdir } from 'node:fs/promises';
@@ -65,7 +66,9 @@ async function main(): Promise<void> {
         ]);
         const transactions = (queryResult as { data?: ActualTransaction[] }).data;
         if (!Array.isArray(transactions)) throw new Error('ActualQL did not return transaction rows');
+        const jev = new TypeSafeClient();
         const classifier = await createActualClassifier(actual, {
+            client: jev,
             maxExamplesPerCategory,
             history: transactions,
             eligibleAccountIds: new Set(accounts.filter((account) => !account.offbudget).map((account) => account.id)),

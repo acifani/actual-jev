@@ -5,11 +5,13 @@ import {
     type CategorizedExample,
     type Classification,
     type ClassifierOptions,
+    type JevChoiceClient,
     type TransactionDetails,
 } from './classifier.js';
 
 export type ActualTransaction = Awaited<ReturnType<typeof ActualApi.getTransactions>>[number];
 export type ActualClient = Pick<typeof ActualApi, 'getCategoryGroups' | 'getPayees' | 'getNote'>;
+export type ActualDataClient = ActualClient & Pick<typeof ActualApi, 'getAccounts' | 'aqlQuery' | 'q'>;
 
 export type ActualTransactionInput = Partial<ActualTransaction> & {
     payee_name?: string;
@@ -27,6 +29,18 @@ export interface ActualClassifierOptions extends ClassifierOptions {
     history?: readonly ActualTransaction[];
     eligibleAccountIds?: ReadonlySet<string>;
 }
+
+interface JevConfig {
+    jev: JevChoiceClient;
+    model?: string;
+    maxExamplesPerCategory?: number;
+}
+
+export type ActualJevConfig = JevConfig &
+    (
+        | { actual: ActualDataClient; categories?: never; examples?: never }
+        | { actual?: never; categories: readonly CategoryCandidate[]; examples?: readonly CategorizedExample[] }
+    );
 
 function usefulNote(note: string | undefined): string | undefined {
     const text = note
@@ -115,4 +129,78 @@ export async function createActualClassifier(
             return classifyTransaction(details, categories, { ...options, examples });
         },
     };
+}
+
+interface ActualSnapshot {
+    classifier: ActualClassifier;
+    accountNames: ReadonlyMap<string, string>;
+}
+
+/** Classifies with either caller-supplied data or a lazily loaded Actual budget snapshot. */
+export class ActualJev {
+    private snapshot: ActualSnapshot | undefined;
+    private loading: Promise<ActualSnapshot> | undefined;
+
+    constructor(private readonly config: ActualJevConfig) {
+        if (!config.jev) throw new TypeError('A configured Jev client is required');
+    }
+
+    get categories(): readonly CategoryCandidate[] {
+        return 'actual' in this.config ? (this.snapshot?.classifier.categories ?? []) : this.config.categories;
+    }
+
+    private async load(): Promise<ActualSnapshot> {
+        if (!this.config.actual) throw new TypeError('Manual data cannot be refreshed from Actual');
+        const actual = this.config.actual;
+        const [accounts, queryResult] = await Promise.all([
+            actual.getAccounts(),
+            actual.aqlQuery(actual.q('transactions').select('*').options({ splits: 'grouped' })),
+        ]);
+        const history = (queryResult as { data?: ActualTransaction[] }).data;
+        if (!Array.isArray(history)) throw new Error('ActualQL did not return transaction rows');
+        const classifier = await createActualClassifier(actual, {
+            client: this.config.jev,
+            model: this.config.model,
+            maxExamplesPerCategory: this.config.maxExamplesPerCategory,
+            history,
+            eligibleAccountIds: new Set(accounts.filter((account) => !account.offbudget).map((account) => account.id)),
+        });
+        return { classifier, accountNames: new Map(accounts.map((account) => [account.id, account.name])) };
+    }
+
+    async refresh(): Promise<void> {
+        if (!this.config.actual) return;
+        if (!this.loading) {
+            const loading = this.load();
+            this.loading = loading;
+            void loading.then(
+                (snapshot) => {
+                    this.snapshot = snapshot;
+                    if (this.loading === loading) this.loading = undefined;
+                },
+                () => {
+                    if (this.loading === loading) this.loading = undefined;
+                },
+            );
+        }
+        await this.loading;
+    }
+
+    async classify(transaction: ActualTransactionInput | TransactionDetails): Promise<Classification> {
+        if (!this.config.actual) {
+            return classifyTransaction(transaction, this.config.categories, {
+                client: this.config.jev,
+                model: this.config.model,
+                examples: this.config.examples,
+                maxExamplesPerCategory: this.config.maxExamplesPerCategory,
+            });
+        }
+        if (!this.snapshot) await this.refresh();
+        const snapshot = this.snapshot!;
+        const input = transaction as ActualTransactionInput;
+        return snapshot.classifier.classify({
+            ...input,
+            accountName: input.accountName ?? (input.account ? snapshot.accountNames.get(input.account) : undefined),
+        });
+    }
 }
