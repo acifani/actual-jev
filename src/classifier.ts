@@ -50,6 +50,13 @@ export interface ClassifierOptions {
 
 const NO_MATCH = 'none_of_the_above';
 
+function probability(value: unknown, label: string): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+        throw new Error(`Jev returned an invalid ${label}`);
+    }
+    return value;
+}
+
 /** Ask Jev to choose among caller-supplied Actual category IDs. Never writes to Actual. */
 export async function classifyTransaction(
     transaction: TransactionDetails,
@@ -95,38 +102,20 @@ export async function classifyTransaction(
         },
     });
     const answer = response.answers.category;
-    if (!Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) {
-        throw new Error('Jev returned an invalid confidence');
-    }
+    const confidence = probability(answer.confidence, 'confidence');
     if (answer.choice !== NO_MATCH && !byOption.has(answer.choice)) {
         throw new Error(`Jev selected an unknown category option: ${answer.choice}`);
     }
     const candidates = [...byOption]
-        .map(([option, category]) => {
-            const probability = answer.probabilities[option];
-            if (
-                typeof probability !== 'number' ||
-                !Number.isFinite(probability) ||
-                probability < 0 ||
-                probability > 1
-            ) {
-                throw new Error(`Jev returned an invalid probability for ${option}`);
-            }
-            return { ...category, probability };
-        })
+        .map(([option, category]) => ({
+            ...category,
+            probability: probability(answer.probabilities[option], `probability for ${option}`),
+        }))
         .sort((a, b) => b.probability - a.probability);
-    const noMatchProbability = answer.probabilities[NO_MATCH];
-    if (
-        typeof noMatchProbability !== 'number' ||
-        !Number.isFinite(noMatchProbability) ||
-        noMatchProbability < 0 ||
-        noMatchProbability > 1
-    ) {
-        throw new Error('Jev returned an invalid no-match probability');
-    }
+    const noMatchProbability = probability(answer.probabilities[NO_MATCH], 'no-match probability');
     return {
         categoryId: answer.choice === NO_MATCH ? null : byOption.get(answer.choice)!.id,
-        confidence: answer.confidence,
+        confidence,
         candidates,
         noMatchProbability,
     };

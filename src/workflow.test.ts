@@ -195,3 +195,111 @@ void test('uses emphasis only for terminal output', async () => {
     assert.ok((lines[0] ?? '').includes('\u001b[1m  shop\u001b[0m'));
     assert.ok((lines[0] ?? '').includes('\u001b[36mFood / Groceries\u001b[0m'));
 });
+
+void test('filters split children before inheriting details and skips duplicate top-level children', async () => {
+    const { port, updates } = fixture();
+    const child = { ...base, id: 'child', is_child: true };
+    port.transactions = [
+        {
+            ...base,
+            id: 'parent',
+            payee: 'shop',
+            imported_payee: 'Imported shop',
+            subtransactions: [child, { ...child, id: 'old', date: '2026-08-31' }],
+        },
+        child,
+        { ...base, id: 'later', date: '2026-09-02' },
+    ];
+    const classified: ActualTransaction[] = [];
+    const classify = port.classify.bind(port);
+    port.classify = (transaction) => {
+        classified.push(transaction);
+        return classify(transaction);
+    };
+    const summary = await runCategorization(port, {
+        mode: 'auto',
+        threshold: 0.95,
+        account: 'Checking',
+        from: base.date,
+        to: base.date,
+    });
+    assert.deepEqual(summary, { examined: 1, applied: 1, wouldApply: 0, skipped: 0, transfersSkipped: 0 });
+    assert.deepEqual(classified, [
+        { ...child, payee: 'shop', imported_payee: 'Imported shop', accountName: 'Checking' },
+    ]);
+    assert.deepEqual(updates, [{ id: 'child', fields: { category: 'groceries' } }]);
+});
+
+void test('counts eligible split transfers once using both parent and child transfer metadata', async () => {
+    const { port, updates } = fixture();
+    port.accounts = [...port.accounts, { id: 'tracking', name: 'Tracking', offbudget: true }];
+    port.transferPayeeAccountIds = new Map([
+        ['internal', 'checking'],
+        ['external', 'tracking'],
+    ]);
+    const child = { ...base, is_child: true };
+    port.transactions = [
+        {
+            ...base,
+            id: 'internal-parent',
+            payee: 'internal',
+            subtransactions: [
+                { ...child, id: 'inherited-transfer' },
+                { ...child, id: 'categorized', category: 'rent' },
+                { ...child, id: 'old', date: '2026-08-31' },
+            ],
+        },
+        {
+            ...base,
+            id: 'external-parent',
+            payee: 'external',
+            subtransactions: [
+                { ...child, id: 'eligible' },
+                { ...child, id: 'child-transfer', payee: 'internal' },
+                { ...child, id: 'unresolved-transfer', transfer_id: 'missing' },
+            ],
+        },
+    ];
+    const summary = await runCategorization(port, { mode: 'auto', threshold: 0.9, from: base.date });
+    assert.deepEqual(summary, { examined: 1, applied: 1, wouldApply: 0, skipped: 0, transfersSkipped: 3 });
+    assert.deepEqual(updates, [{ id: 'eligible', fields: { category: 'groceries' } }]);
+});
+
+void test('requires a unique account match and excludes explicitly selected off-budget accounts', async () => {
+    const { port } = fixture();
+    await assert.rejects(runCategorization(port, { mode: 'auto', threshold: 0.9, account: 'missing' }), /exactly one/);
+    port.accounts = [...port.accounts, { id: 'tracking', name: 'Checking', offbudget: true }];
+    await assert.rejects(runCategorization(port, { mode: 'auto', threshold: 0.9, account: 'Checking' }), /exactly one/);
+    const summary = await runCategorization(port, { mode: 'auto', threshold: 0.9, account: 'tracking' });
+    assert.equal(summary.examined, 0);
+});
+
+void test('rejects invalid suggestions and interactive choices before writing', async () => {
+    const { port, updates } = fixture();
+    const classify = port.classify.bind(port);
+    port.classify = async (transaction) => ({ ...(await classify(transaction)), categoryId: 'unknown' });
+    await assert.rejects(runCategorization(port, { mode: 'auto', threshold: 0.9 }), /Classifier returned/);
+    port.classify = classify;
+    await assert.rejects(runCategorization(port, { mode: 'interactive', threshold: 0.9 }), /choice handler/);
+    port.choose = () => Promise.resolve('unknown');
+    await assert.rejects(runCategorization(port, { mode: 'interactive', threshold: 0.9 }), /Selected category/);
+    assert.deepEqual(updates, []);
+});
+
+void test('prints the suggestion before prompting and stops on a failed write', async () => {
+    const { port, lines } = fixture();
+    const events: string[] = [];
+    port.choose = () => {
+        assert.match(lines.at(-1) ?? '', /Suggestion/);
+        events.push('choose');
+        return Promise.resolve('groceries');
+    };
+    port.updateTransaction = () => {
+        events.push('write');
+        return Promise.reject(new Error('write failed'));
+    };
+    await assert.rejects(runCategorization(port, { mode: 'interactive', threshold: 0.9 }), /write failed/);
+    assert.deepEqual(events, ['choose', 'write']);
+    assert.equal(lines.length, 1);
+    assert.doesNotMatch(lines[0] ?? '', /Decision/);
+});

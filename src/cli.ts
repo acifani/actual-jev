@@ -6,7 +6,10 @@ import { mkdir } from 'node:fs/promises';
 import { createActualClassifier, type ActualTransaction } from './actual.js';
 import type { Classification } from './classifier.js';
 import { categoryChoices } from './choices.js';
-import { runCategorization, type RunMode, type RunOptions } from './workflow.js';
+import { runCategorization } from './workflow.js';
+import { parseArgs } from './args.js';
+
+export { parseArgs } from './args.js';
 
 function usage(): string {
     return `Usage: actual-jev [--interactive | --auto | --dry-run] [options]
@@ -24,63 +27,6 @@ Options:
 
 Environment: ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_SYNC_ID,
 ACTUAL_ENCRYPTION_PASSWORD (if enabled), TYPESAFE_API_KEY`;
-}
-
-function parseDate(value: string, flag: string): string {
-    if (
-        !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
-        Number.isNaN(Date.parse(`${value}T00:00:00Z`)) ||
-        new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value
-    ) {
-        throw new Error(`${flag} requires a valid YYYY-MM-DD date`);
-    }
-    return value;
-}
-
-export function parseArgs(args: readonly string[]): RunOptions & { dataDir: string; help: boolean } {
-    let mode: RunMode = 'interactive';
-    let modeSet = false;
-    let threshold = 0.9;
-    let account: string | undefined;
-    let from: string | undefined;
-    let to: string | undefined;
-    let dataDir = '.actual-data';
-    let help = false;
-    for (let index = 0; index < args.length; index++) {
-        const arg = args[index];
-        if (arg === '--help' || arg === '-h') {
-            help = true;
-            continue;
-        }
-        if (arg === '--auto' || arg === '--interactive' || arg === '--dry-run') {
-            if (modeSet) throw new Error('Choose only one mode');
-            mode = arg.slice(2) as RunMode;
-            modeSet = true;
-            continue;
-        }
-        if (
-            arg === '--threshold' ||
-            arg === '--account' ||
-            arg === '--from' ||
-            arg === '--to' ||
-            arg === '--data-dir'
-        ) {
-            const value = args[++index];
-            if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
-            if (arg === '--threshold') {
-                threshold = Number(value);
-                if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1)
-                    throw new Error('--threshold must be between 0 and 1');
-            } else if (arg === '--account') account = value;
-            else if (arg === '--from') from = parseDate(value, arg);
-            else if (arg === '--to') to = parseDate(value, arg);
-            else dataDir = value;
-            continue;
-        }
-        throw new Error(`Unknown option: ${arg}`);
-    }
-    if (from && to && from > to) throw new Error('--from must be on or before --to');
-    return { mode, threshold, account, from, to, dataDir, help };
 }
 
 function requireEnv(name: string): string {

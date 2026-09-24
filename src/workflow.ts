@@ -1,3 +1,4 @@
+import { decision, describeSuggestion } from './output.js';
 import type { ActualTransaction } from './actual.js';
 import type { CategoryCandidate, Classification } from './classifier.js';
 
@@ -34,10 +35,6 @@ export interface WorkflowPort {
     color?: boolean;
 }
 
-function isUncategorized(transaction: ActualTransaction): boolean {
-    return !transaction.category;
-}
-
 function isSkippableTransfer(
     transaction: ActualTransaction,
     transferPayeeAccountIds: ReadonlyMap<string, string>,
@@ -53,45 +50,6 @@ function isSkippableTransfer(
 
 function inRange(transaction: ActualTransaction, options: RunOptions): boolean {
     return (!options.from || transaction.date >= options.from) && (!options.to || transaction.date <= options.to);
-}
-
-function wrapText(value: string, prefix: string, continuation: string): string[] {
-    const words = value.replace(/\s+/g, ' ').trim().split(' ');
-    const lines: string[] = [];
-    let line = prefix;
-    for (const word of words) {
-        if (line !== prefix && line.length + word.length + 1 > 88) {
-            lines.push(line);
-            line = `${continuation}${word}`;
-        } else {
-            line += `${line === prefix ? '' : ' '}${word}`;
-        }
-    }
-    lines.push(line);
-    return lines;
-}
-
-function emphasize(value: string, code: string, color: boolean): string {
-    return color ? `\u001b[${code}m${value}\u001b[0m` : value;
-}
-
-function decision(value: string, color: boolean, applied = false): string {
-    return `  Decision    ${emphasize(value, applied ? '32' : '33', color)}`;
-}
-
-function describe(
-    transaction: ActualTransaction,
-    accountName: string,
-    payeeNames?: ReadonlyMap<string, string>,
-    color = false,
-): string {
-    const amount = (transaction.amount / 100).toFixed(2);
-    const namedPayee = transaction.payee ? payeeNames?.get(transaction.payee)?.trim() : undefined;
-    const importedPayee = transaction.imported_payee?.trim();
-    const merchant = importedPayee?.match(/\bPresso\s+(.+?)\s+-\s+Transazione\b/i)?.[1]?.trim();
-    const payee = namedPayee && namedPayee !== importedPayee ? namedPayee : (merchant ?? namedPayee ?? importedPayee);
-    const payeeLines = wrapText(payee || 'Unknown payee', '  ', '  ');
-    return `\n  ${emphasize(amount, '1;36', color)}\n${payeeLines.map((line) => emphasize(line, '1', color)).join('\n')}\n  ${emphasize(`${transaction.date} · ${accountName}`, '2', color)}`;
 }
 
 /** Process grouped ActualQL rows, classifying each split child once. */
@@ -114,83 +72,85 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
     const categoryById = new Map(port.categories.map((category) => [category.id, category]));
     const summary: RunSummary = { examined: 0, applied: 0, wouldApply: 0, skipped: 0, transfersSkipped: 0 };
 
+    const color = Boolean(port.color);
+
     async function process(transaction: ActualTransaction, accountName: string): Promise<void> {
         summary.examined++;
         const result = await port.classify({ ...transaction, accountName });
         const suggestion = result.categoryId ? categoryById.get(result.categoryId) : undefined;
         if (result.categoryId && !suggestion)
             throw new Error('Classifier returned a category outside the visible catalog');
-        const suggestedName = suggestion ? `${suggestion.groupName} / ${suggestion.name}` : 'no match';
-        const suggestionLine = `  Suggestion  ${emphasize(suggestedName, '36', Boolean(port.color))} · ${Math.round(result.confidence * 100)}% confidence`;
-        const line = `${describe(transaction, accountName, port.payeeNames, port.color)}\n\n${suggestionLine}`;
-        if (options.mode === 'interactive') {
+        const line = describeSuggestion(
+            transaction,
+            accountName,
+            suggestion,
+            result.confidence,
+            port.payeeNames,
+            color,
+        );
+        let selected = result.categoryId;
+        let skipped = 'Skipped';
+        const interactive = options.mode === 'interactive';
+        if (interactive) {
             if (!port.choose) throw new Error('Interactive mode requires a choice handler');
             port.print(line);
-            const selected = await port.choose(transaction, result);
+            selected = await port.choose(transaction, result);
             if (selected && !categoryById.has(selected))
                 throw new Error('Selected category is outside the visible catalog');
-            if (!selected) {
-                summary.skipped++;
-                port.print(decision('Skipped', Boolean(port.color)));
-                return;
-            }
+        } else if (!selected || result.confidence < options.threshold) {
+            skipped += selected ? ' · below threshold' : ' · no match';
+            selected = null;
+        }
+
+        let message: string;
+        let applied = false;
+        if (!selected) {
+            summary.skipped++;
+            message = skipped;
+        } else if (options.mode === 'dry-run') {
+            summary.wouldApply++;
+            message = 'Would apply';
+        } else {
             await port.updateTransaction(transaction.id, { category: selected });
             summary.applied++;
+            applied = true;
             const category = categoryById.get(selected)!;
-            port.print(decision(`Applied ${category.groupName} / ${category.name}`, Boolean(port.color), true));
-            return;
+            message = interactive ? `Applied ${category.groupName} / ${category.name}` : 'Applied';
         }
-        if (!result.categoryId || result.confidence < options.threshold) {
-            summary.skipped++;
-            port.print(
-                `${line}\n${decision(`Skipped · ${result.categoryId ? 'below threshold' : 'no match'}`, Boolean(port.color))}`,
-            );
-            return;
-        }
-        if (options.mode === 'dry-run') {
-            summary.wouldApply++;
-            port.print(`${line}\n${decision('Would apply', Boolean(port.color))}`);
-            return;
-        }
-        await port.updateTransaction(transaction.id, { category: result.categoryId });
-        summary.applied++;
-        port.print(`${line}\n${decision('Applied', Boolean(port.color), true)}`);
+        port.print(`${interactive ? '' : `${line}\n`}${decision(message, color, applied)}`);
     }
 
     for (const transaction of port.transactions) {
         if (!allowedAccounts.has(transaction.account)) continue;
         const accountName = accountById.get(transaction.account)?.name ?? transaction.account;
-        if (transaction.subtransactions?.length) {
-            if (isSkippableTransfer(transaction, port.transferPayeeAccountIds, accountById, transactionById)) {
-                summary.transfersSkipped += transaction.subtransactions.filter(
-                    (child) => isUncategorized(child) && inRange(child, options),
-                ).length;
+        const children = transaction.subtransactions?.length ? transaction.subtransactions : undefined;
+        if (!children && transaction.is_child) continue;
+        const parentTransfer = isSkippableTransfer(
+            transaction,
+            port.transferPayeeAccountIds,
+            accountById,
+            transactionById,
+        );
+        for (const row of children ?? [transaction]) {
+            if (row.category || !inRange(row, options)) continue;
+            if (
+                parentTransfer ||
+                (children && isSkippableTransfer(row, port.transferPayeeAccountIds, accountById, transactionById))
+            ) {
+                summary.transfersSkipped++;
                 continue;
             }
-            for (const child of transaction.subtransactions) {
-                if (!isUncategorized(child) || !inRange(child, options)) continue;
-                if (isSkippableTransfer(child, port.transferPayeeAccountIds, accountById, transactionById)) {
-                    summary.transfersSkipped++;
-                    continue;
-                }
-                await process(
-                    {
-                        ...child,
-                        payee: child.payee ?? transaction.payee,
-                        imported_payee: child.imported_payee ?? transaction.imported_payee,
-                        date: child.date ?? transaction.date,
-                    },
-                    accountName,
-                );
-            }
-            continue;
+            // Eligibility uses the original child; inherit display/classification details afterward.
+            const candidate = children
+                ? {
+                      ...row,
+                      payee: row.payee ?? transaction.payee,
+                      imported_payee: row.imported_payee ?? transaction.imported_payee,
+                      date: row.date ?? transaction.date,
+                  }
+                : row;
+            await process(candidate, accountName);
         }
-        if (transaction.is_child || !isUncategorized(transaction) || !inRange(transaction, options)) continue;
-        if (isSkippableTransfer(transaction, port.transferPayeeAccountIds, accountById, transactionById)) {
-            summary.transfersSkipped++;
-            continue;
-        }
-        await process(transaction, accountName);
     }
     return summary;
 }
