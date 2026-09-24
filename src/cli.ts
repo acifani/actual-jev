@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 import * as actual from '@actual-app/api';
-import { createInterface } from 'node:readline/promises';
+import search from '@inquirer/search';
 import { stdin, stdout } from 'node:process';
 import { mkdir } from 'node:fs/promises';
 import { createActualClassifier, type ActualTransaction } from './actual.js';
 import type { Classification } from './classifier.js';
+import { categoryChoices } from './choices.js';
 import { runCategorization, type RunMode, type RunOptions } from './workflow.js';
 
 function usage(): string {
     return `Usage: actual-jev [--interactive | --auto | --dry-run] [options]
 
 Modes: --interactive (default), --auto, --dry-run
+Interactive: type to search grouped categories, use arrow keys to move,
+and press Enter to select the highlighted category or Skip.
 Options:
   --threshold NUMBER   Minimum Jev confidence for auto/dry-run (default: 0.9)
   --account ID_OR_NAME  Limit to one account
@@ -99,12 +102,11 @@ async function main(): Promise<void> {
     if (options.mode === 'interactive' && !stdin.isTTY)
         throw new Error('Interactive mode requires a terminal; use --dry-run or --auto');
 
-    const prompt = options.mode === 'interactive' ? createInterface({ input: stdin, output: stdout }) : undefined;
     let initialized = false;
     let writes = false;
     try {
         await mkdir(options.dataDir, { recursive: true });
-        await actual.init({ serverURL, password, dataDir: options.dataDir });
+        await actual.init({ serverURL, password, dataDir: options.dataDir, verbose: false });
         initialized = true;
         await actual.downloadBudget(syncId, { password: process.env.ACTUAL_ENCRYPTION_PASSWORD });
         await actual.sync();
@@ -131,31 +133,17 @@ async function main(): Promise<void> {
                     writes = true;
                 },
                 print: (line) => console.log(line),
-                choose: prompt
-                    ? async (_transaction, result: Classification) => {
-                          categories.forEach((category, index) =>
-                              console.log(`  ${index + 1}. ${category.groupName} / ${category.name}`),
-                          );
-                          const defaultIndex = result.categoryId
-                              ? categories.findIndex((category) => category.id === result.categoryId) + 1
-                              : 0;
-                          while (true) {
-                              const answer = (
-                                  await prompt.question(
-                                      `Choose category number, Enter to ${defaultIndex ? `accept #${defaultIndex}` : 'skip'}, or s to skip: `,
-                                  )
-                              )
-                                  .trim()
-                                  .toLowerCase();
-                              if (!answer) return defaultIndex ? (categories[defaultIndex - 1]?.id ?? null) : null;
-                              if (answer === 's' || answer === 'skip') return null;
-                              const number = Number(answer);
-                              if (Number.isInteger(number) && number >= 1 && number <= categories.length)
-                                  return categories[number - 1]?.id ?? null;
-                              console.log('Enter a listed category number or s to skip.');
-                          }
-                      }
-                    : undefined,
+                color: Boolean(stdout.isTTY && !('NO_COLOR' in process.env)),
+                choose:
+                    options.mode === 'interactive'
+                        ? async (_transaction, result: Classification) =>
+                              search<string | null>({
+                                  message: 'Category (type to search, arrows to move, Enter to select)',
+                                  source: (term) => categoryChoices(categories, term),
+                                  default: result.categoryId,
+                                  pageSize: Math.max(7, Math.min((stdout.rows ?? 20) - 6, 20)),
+                              })
+                        : undefined,
             },
             options,
         );
@@ -163,7 +151,6 @@ async function main(): Promise<void> {
             `Examined ${summary.examined}; applied ${summary.applied}; would apply ${summary.wouldApply}; skipped ${summary.skipped}; transfers skipped ${summary.transfersSkipped}.`,
         );
     } finally {
-        prompt?.close();
         if (initialized) {
             try {
                 if (writes) await actual.sync();

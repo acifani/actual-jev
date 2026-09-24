@@ -30,6 +30,7 @@ export interface WorkflowPort {
     updateTransaction(id: string, fields: Partial<ActualTransaction>): Promise<unknown>;
     choose?(transaction: ActualTransaction, result: Classification): Promise<string | null>;
     print(line: string): void;
+    color?: boolean;
 }
 
 function isUncategorized(transaction: ActualTransaction): boolean {
@@ -44,12 +45,43 @@ function inRange(transaction: ActualTransaction, options: RunOptions): boolean {
     return (!options.from || transaction.date >= options.from) && (!options.to || transaction.date <= options.to);
 }
 
+function wrapText(value: string, prefix: string, continuation: string): string[] {
+    const words = value.replace(/\s+/g, ' ').trim().split(' ');
+    const lines: string[] = [];
+    let line = prefix;
+    for (const word of words) {
+        if (line !== prefix && line.length + word.length + 1 > 88) {
+            lines.push(line);
+            line = `${continuation}${word}`;
+        } else {
+            line += `${line === prefix ? '' : ' '}${word}`;
+        }
+    }
+    lines.push(line);
+    return lines;
+}
+
+function emphasize(value: string, code: string, color: boolean): string {
+    return color ? `\u001b[${code}m${value}\u001b[0m` : value;
+}
+
+function decision(value: string, color: boolean, applied = false): string {
+    return `  Decision    ${emphasize(value, applied ? '32' : '33', color)}`;
+}
+
 function describe(
     transaction: ActualTransaction,
     accountName: string,
     payeeNames?: ReadonlyMap<string, string>,
+    color = false,
 ): string {
-    return `${transaction.date} | ${accountName} | ${transaction.imported_payee ?? (transaction.payee && payeeNames?.get(transaction.payee)) ?? 'Unknown payee'} | ${transaction.amount}`;
+    const amount = (transaction.amount / 100).toFixed(2);
+    const namedPayee = transaction.payee ? payeeNames?.get(transaction.payee)?.trim() : undefined;
+    const importedPayee = transaction.imported_payee?.trim();
+    const merchant = importedPayee?.match(/\bPresso\s+(.+?)\s+-\s+Transazione\b/i)?.[1]?.trim();
+    const payee = namedPayee && namedPayee !== importedPayee ? namedPayee : (merchant ?? namedPayee ?? importedPayee);
+    const payeeLines = wrapText(payee || 'Unknown payee', '  ', '  ');
+    return `\n  ${emphasize(amount, '1;36', color)}\n${payeeLines.map((line) => emphasize(line, '1', color)).join('\n')}\n  ${emphasize(`${transaction.date} · ${accountName}`, '2', color)}`;
 }
 
 /** Process grouped ActualQL rows, classifying each split child once. */
@@ -65,31 +97,47 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
     const categoryById = new Map(port.categories.map((category) => [category.id, category]));
     const summary: RunSummary = { examined: 0, applied: 0, wouldApply: 0, skipped: 0, transfersSkipped: 0 };
 
-    async function select(transaction: ActualTransaction, accountName: string): Promise<string | null> {
+    async function process(transaction: ActualTransaction, accountName: string): Promise<void> {
         summary.examined++;
         const result = await port.classify({ ...transaction, accountName });
         const suggestion = result.categoryId ? categoryById.get(result.categoryId) : undefined;
         if (result.categoryId && !suggestion)
             throw new Error('Classifier returned a category outside the visible catalog');
-        const line = `${describe(transaction, accountName, port.payeeNames)} -> ${suggestion ? `${suggestion.groupName} / ${suggestion.name}` : 'no match'} (${result.confidence.toFixed(2)})`;
-        port.print(line);
+        const suggestedName = suggestion ? `${suggestion.groupName} / ${suggestion.name}` : 'no match';
+        const suggestionLine = `  Suggestion  ${emphasize(suggestedName, '36', Boolean(port.color))} · ${Math.round(result.confidence * 100)}% confidence`;
+        const line = `${describe(transaction, accountName, port.payeeNames, port.color)}\n\n${suggestionLine}`;
         if (options.mode === 'interactive') {
             if (!port.choose) throw new Error('Interactive mode requires a choice handler');
+            port.print(line);
             const selected = await port.choose(transaction, result);
             if (selected && !categoryById.has(selected))
                 throw new Error('Selected category is outside the visible catalog');
-            if (!selected) summary.skipped++;
-            return selected;
+            if (!selected) {
+                summary.skipped++;
+                port.print(decision('Skipped', Boolean(port.color)));
+                return;
+            }
+            await port.updateTransaction(transaction.id, { category: selected });
+            summary.applied++;
+            const category = categoryById.get(selected)!;
+            port.print(decision(`Applied ${category.groupName} / ${category.name}`, Boolean(port.color), true));
+            return;
         }
         if (!result.categoryId || result.confidence < options.threshold) {
             summary.skipped++;
-            return null;
+            port.print(
+                `${line}\n${decision(`Skipped · ${result.categoryId ? 'below threshold' : 'no match'}`, Boolean(port.color))}`,
+            );
+            return;
         }
         if (options.mode === 'dry-run') {
             summary.wouldApply++;
-            return null;
+            port.print(`${line}\n${decision('Would apply', Boolean(port.color))}`);
+            return;
         }
-        return result.categoryId;
+        await port.updateTransaction(transaction.id, { category: result.categoryId });
+        summary.applied++;
+        port.print(`${line}\n${decision('Applied', Boolean(port.color), true)}`);
     }
 
     for (const transaction of port.transactions) {
@@ -108,7 +156,7 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
                     summary.transfersSkipped++;
                     continue;
                 }
-                const categoryId = await select(
+                await process(
                     {
                         ...child,
                         payee: child.payee ?? transaction.payee,
@@ -117,10 +165,6 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
                     },
                     accountName,
                 );
-                if (categoryId) {
-                    await port.updateTransaction(child.id, { category: categoryId });
-                    summary.applied++;
-                }
             }
             continue;
         }
@@ -129,11 +173,7 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
             summary.transfersSkipped++;
             continue;
         }
-        const categoryId = await select(transaction, accountName);
-        if (categoryId) {
-            await port.updateTransaction(transaction.id, { category: categoryId });
-            summary.applied++;
-        }
+        await process(transaction, accountName);
     }
     return summary;
 }

@@ -32,6 +32,7 @@
     },
     "dependencies": {
         "@actual-app/api": "^26.9.0",
+        "@inquirer/search": "^4.3.3",
         "@typesafe-ai/sdk": "^0.6.0"
     },
     "devDependencies": {
