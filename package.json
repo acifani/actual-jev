@@ -1,0 +1,47 @@
+{
+    "name": "actual-jev",
+    "version": "0.1.0",
+    "description": "Categorize Actual Budget transactions with TypeSafe Jev",
+    "type": "module",
+    "packageManager": "pnpm@12.1.0",
+    "engines": {
+        "node": ">=24.10 <25"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "bin": {
+        "actual-jev": "./dist/cli.js"
+    },
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "prepack": "pnpm build",
+        "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+        "test": "node --import tsx --test src/*.test.ts",
+        "lint": "eslint src",
+        "format": "prettier --write ."
+    },
+    "dependencies": {
+        "@actual-app/api": "^26.9.0",
+        "@typesafe-ai/sdk": "^0.6.0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@types/node": "^24.13.6",
+        "@typescript/native": "npm:typescript@^7.0.2",
+        "eslint": "^10.11.0",
+        "prettier": "^3.9.9",
+        "tsx": "^4.23.15",
+        "typescript": "npm:@typescript/typescript6@^6.0.2",
+        "typescript-eslint": "^8.70.1"
+    }
+}
