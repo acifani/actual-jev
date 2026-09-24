@@ -97,8 +97,12 @@ export async function runCategorization(port: WorkflowPort, options: RunOptions)
             selected = await port.choose(transaction, result);
             if (selected && !categoryById.has(selected))
                 throw new Error('Selected category is outside the visible catalog');
-        } else if (!selected || result.confidence < options.threshold) {
-            skipped += selected ? ' · below threshold' : ' · no match';
+        } else if (!selected || result.requiresReview || result.confidence < options.threshold) {
+            skipped += !selected
+                ? ' · no match'
+                : result.requiresReview
+                  ? ' · conflicting evidence'
+                  : ' · below threshold';
             selected = null;
         }
 

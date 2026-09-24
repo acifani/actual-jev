@@ -4,7 +4,7 @@ import search from '@inquirer/search';
 import { stdin, stdout } from 'node:process';
 import { mkdir } from 'node:fs/promises';
 import { createActualClassifier, type ActualTransaction } from './actual.js';
-import type { Classification } from './classifier.js';
+import { examplesPerCategoryFromEnv, type Classification } from './classifier.js';
 import { categoryChoices } from './choices.js';
 import { runCategorization } from './workflow.js';
 import { parseArgs } from './args.js';
@@ -26,7 +26,8 @@ Options:
   --help
 
 Environment: ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_SYNC_ID,
-ACTUAL_ENCRYPTION_PASSWORD (if enabled), TYPESAFE_API_KEY`;
+ACTUAL_ENCRYPTION_PASSWORD (if enabled), TYPESAFE_API_KEY,
+ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY (default: 3)`;
 }
 
 function requireEnv(name: string): string {
@@ -45,6 +46,7 @@ async function main(): Promise<void> {
     const password = requireEnv('ACTUAL_PASSWORD');
     const syncId = requireEnv('ACTUAL_SYNC_ID');
     requireEnv('TYPESAFE_API_KEY');
+    const maxExamplesPerCategory = examplesPerCategoryFromEnv(process.env);
     if (options.mode === 'interactive' && !stdin.isTTY)
         throw new Error('Interactive mode requires a terminal; use --dry-run or --auto');
 
@@ -56,14 +58,18 @@ async function main(): Promise<void> {
         initialized = true;
         await actual.downloadBudget(syncId, { password: process.env.ACTUAL_ENCRYPTION_PASSWORD });
         await actual.sync();
-        const [accounts, payees, classifier, queryResult] = await Promise.all([
+        const [accounts, payees, queryResult] = await Promise.all([
             actual.getAccounts(),
             actual.getPayees(),
-            createActualClassifier(actual),
             actual.aqlQuery(actual.q('transactions').select('*').options({ splits: 'grouped' })),
         ]);
         const transactions = (queryResult as { data?: ActualTransaction[] }).data;
         if (!Array.isArray(transactions)) throw new Error('ActualQL did not return transaction rows');
+        const classifier = await createActualClassifier(actual, {
+            maxExamplesPerCategory,
+            history: transactions,
+            eligibleAccountIds: new Set(accounts.filter((account) => !account.offbudget).map((account) => account.id)),
+        });
         const transferPayeeAccountIds = new Map(
             payees.flatMap((payee) => (payee.transfer_acct ? [[payee.id, payee.transfer_acct] as const] : [])),
         );

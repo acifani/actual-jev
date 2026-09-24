@@ -18,12 +18,16 @@ Fill in `.env` with your Actual server URL and password, TypeSafe API key, and t
 ```sh
 pnpm start --dry-run                    # Preview automatic suggestions
 pnpm start                              # Choose a category or skip each transaction
-pnpm start --auto --threshold 0.9       # Apply high-confidence suggestions
+pnpm start --auto                       # Apply high-confidence suggestions
 ```
 
-Dry-run does not change transactions. The confidence threshold defaults to `0.9` and can be set from `0` to `1` for dry-run and automatic mode. Only uncategorized transactions are considered.
+Dry-run does not change transactions. Automatic mode applies suggestions with confidence of at least `0.9` by default; `--threshold` also controls dry-run previews. The tool considers uncategorized transactions in on-budget accounts, including uncategorized parts of split transactions, and skips internal transfers.
 
-By default, on-budget accounts and all dates are scanned. Use `--account NAME_OR_ID`, `--from YYYY-MM-DD`, and `--to YYYY-MM-DD` to narrow the scan. Use `--data-dir PATH` to change the local Actual cache directory. Run `pnpm start --help` for all options.
+Each prediction sends TypeSafe the transaction's payee, notes, amount, date, and account name when available, plus visible category names and notes and relevant previously categorized transactions. Automatic mode skips suggestions when a payee's history conflicts; interactive mode lets you choose.
+
+Set `ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY=0` in `.env` to omit historical examples from predictions (default: `3` per relevant category).
+
+Use `--account NAME_OR_ID`, `--from YYYY-MM-DD`, and `--to YYYY-MM-DD` to narrow the scan. Run `pnpm start --help` for all options.
 
 ## Use from code
 
@@ -38,5 +42,7 @@ const result = await classifyTransaction({ importedPayee: 'Fresh Market', amount
 
 console.log(result.categoryId, result.confidence);
 ```
+
+Pass `examples` in the third argument to use your own categorized transactions. Each example needs a `categoryId` from the supplied catalog and can include `payeeName`, `importedPayee`, `notes`, and `amount`.
 
 Set `TYPESAFE_API_KEY` in your script's environment; library calls do not load `.env` automatically. The classifier only returns a suggestion and does not update Actual.

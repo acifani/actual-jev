@@ -143,6 +143,19 @@ void test('weak suggestions are skipped automatically but can be chosen interact
     );
 });
 
+void test('conflicting evidence blocks automatic writes but remains selectable interactively', async () => {
+    const { port, updates, lines } = fixture(0.99);
+    const classify = port.classify.bind(port);
+    port.classify = async (transaction) => ({ ...(await classify(transaction)), requiresReview: true });
+    const automatic = await runCategorization(port, { mode: 'auto', threshold: 0.9 });
+    assert.equal(automatic.applied, 0);
+    assert.ok(lines.some((line) => line.includes('conflicting evidence')));
+    port.choose = () => Promise.resolve('groceries');
+    const interactive = await runCategorization(port, { mode: 'interactive', threshold: 0.9 });
+    assert.equal(interactive.applied, 2);
+    assert.equal(updates.length, 2);
+});
+
 void test('no-match decisions are visible without making writes', async () => {
     const { port, updates, lines } = fixture();
     port.classify = () =>

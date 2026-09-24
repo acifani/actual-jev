@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classifyTransaction, type JevChoiceClient } from './classifier.js';
+import { classifyTransaction, examplesPerCategoryFromEnv, type JevChoiceClient } from './classifier.js';
 
 const categories = [
     { id: 'food-id', name: 'Groceries', groupName: 'Food' },
@@ -12,7 +12,10 @@ function mock(choice: string, confidence = 0.8): JevChoiceClient {
         systemOne(request) {
             assert.equal(request.model, 'jev-latest');
             assert.equal(request.questions.category.criteria.category_0, 'Food / Groceries');
-            assert.equal(request.state.imported_payee, 'Fresh Market');
+            assert.equal(
+                (request.state as { transaction: { imported_payee: string } }).transaction.imported_payee,
+                'Fresh Market',
+            );
             return Promise.resolve({
                 answers: {
                     category: {
@@ -111,12 +114,16 @@ void test('accepts the category limit, forwards state and model, and ranks by pr
         systemOne(request) {
             assert.equal(request.model, 'custom-model');
             assert.deepEqual(request.state, {
-                payee: 'Employer',
-                imported_payee: null,
-                notes: 'Salary',
-                amount_minor_units: 10000,
-                date: '2026-09-01',
-                account: 'Checking',
+                transaction: {
+                    payee: 'Employer',
+                    imported_payee: null,
+                    notes: 'Salary',
+                    amount_minor_units: 10000,
+                    date: '2026-09-01',
+                    account: 'Checking',
+                },
+                payee_default_category: null,
+                relevant_examples: [],
             });
             assert.equal(Object.keys(request.questions.category.criteria).length, 255);
             assert.equal(request.questions.category.criteria.category_253, 'Group / Category 253 (income)');
@@ -142,4 +149,160 @@ void test('accepts the category limit, forwards state and model, and ranks by pr
     assert.equal(result.categoryId, '253');
     assert.equal(result.candidates[0]?.id, '253');
     assert.equal(result.confidence, 1);
+});
+
+void test('uses contrasting history and notes, but requires review for a mixed-payee history', async () => {
+    const catalog = [
+        { id: 'groceries', name: 'Groceries', groupName: 'Food', note: 'Food to prepare at home' },
+        { id: 'restaurants', name: 'Restaurants', groupName: 'Food', note: 'Prepared meals and deli lunches' },
+    ];
+    const examples = [
+        {
+            id: 'old-grocery',
+            categoryId: 'groceries',
+            payeeName: 'Fresh Market',
+            notes: 'Weekly groceries',
+            amount: -6200,
+        },
+        { id: 'old-lunch', categoryId: 'restaurants', payeeName: 'Fresh Market', notes: 'Deli lunch', amount: -1300 },
+        { id: 'self', categoryId: 'groceries', payeeName: 'Fresh Market', notes: 'Self' },
+        { id: 'hidden', categoryId: 'hidden', payeeName: 'Fresh Market', notes: 'Hidden' },
+    ];
+    const client: JevChoiceClient = {
+        systemOne(request) {
+            const description = request.questions.category.criteria.category_1;
+            assert.equal(typeof description, 'string');
+            assert.match(description as string, /Prepared meals and deli lunches/);
+            const state = request.state as {
+                payee_default_category: string;
+                relevant_examples: Array<{ notes: string; category: string }>;
+            };
+            assert.equal(state.payee_default_category, 'category_0');
+            assert.deepEqual(
+                state.relevant_examples.map((example) => [example.notes, example.category]),
+                [
+                    ['Deli lunch', 'category_1'],
+                    ['Weekly groceries', 'category_0'],
+                ],
+            );
+            return Promise.resolve({
+                answers: {
+                    category: {
+                        choice: 'category_1',
+                        confidence: 0.99,
+                        probabilities: { category_0: 0.01, category_1: 0.99, none_of_the_above: 0 },
+                    },
+                },
+            });
+        },
+    };
+    const result = await classifyTransaction(
+        {
+            id: 'self',
+            payeeName: 'Fresh Market',
+            notes: 'Lunch sandwich',
+            amount: -1450,
+            payeeDefaultCategoryId: 'groceries',
+        },
+        catalog,
+        { client, examples },
+    );
+    assert.equal(result.categoryId, 'restaurants');
+    assert.equal(result.requiresReview, true);
+});
+
+void test('keeps history bounded and ignores irrelevant examples', async () => {
+    const examples = Array.from({ length: 30 }, (_, i) => ({
+        categoryId: i % 2 ? 'travel-id' : 'food-id',
+        payeeName: 'Fresh Market',
+        notes: `Visit ${i}`,
+    }));
+    examples.push({ categoryId: 'travel-id', payeeName: 'Other Store', notes: 'Unrelated' });
+    const client: JevChoiceClient = {
+        systemOne(request) {
+            const state = request.state as { relevant_examples: Array<{ payee: string }> };
+            assert.equal(state.relevant_examples.length, 6);
+            assert.ok(state.relevant_examples.every((example) => example.payee === 'Fresh Market'));
+            return mock('category_0').systemOne(request);
+        },
+    };
+    await classifyTransaction({ payeeName: 'Fresh Market', importedPayee: 'Fresh Market' }, categories, {
+        client,
+        examples,
+    });
+});
+
+void test('configures examples per category from the environment', () => {
+    assert.equal(examplesPerCategoryFromEnv({}), 3);
+    assert.equal(examplesPerCategoryFromEnv({ ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY: '2' }), 2);
+    for (const raw of ['', '-1', '1.5', 'Infinity', '101', ' 2']) {
+        assert.throws(
+            () => examplesPerCategoryFromEnv({ ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY: raw }),
+            /ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY/,
+        );
+    }
+});
+
+void test('honors the per-category limit, including zero', async () => {
+    const examples = Array.from({ length: 8 }, (_, i) => ({
+        id: `example-${i}`,
+        categoryId: i % 2 ? 'travel-id' : 'food-id',
+        payeeName: 'Fresh Market',
+    }));
+    const lengths: number[] = [];
+    const client: JevChoiceClient = {
+        systemOne(request) {
+            const state = request.state as { relevant_examples: unknown[] };
+            lengths.push(state.relevant_examples.length);
+            return Promise.resolve({
+                answers: {
+                    category: {
+                        choice: 'category_0',
+                        confidence: 0.8,
+                        probabilities: { category_0: 0.8, category_1: 0.1, none_of_the_above: 0.1 },
+                    },
+                },
+            });
+        },
+    };
+    const transaction = { importedPayee: 'Fresh Market' };
+    await classifyTransaction(transaction, categories, { client, examples, maxExamplesPerCategory: 2 });
+    await classifyTransaction(transaction, categories, { client, examples, maxExamplesPerCategory: 0 });
+    assert.deepEqual(lengths, [4, 0]);
+    await assert.rejects(
+        classifyTransaction(transaction, categories, { client, maxExamplesPerCategory: -1 }),
+        RangeError,
+    );
+});
+
+void test('includes relevant examples from all 20 categories without a total cap', async () => {
+    const catalog = Array.from({ length: 20 }, (_, index) => ({
+        id: `category-id-${index}`,
+        name: `Category ${index}`,
+        groupName: 'Group',
+    }));
+    const examples = catalog.map((category) => ({ categoryId: category.id, payeeName: 'Shared Shop' }));
+    const client: JevChoiceClient = {
+        systemOne(request) {
+            const state = request.state as { relevant_examples: Array<{ category: string }> };
+            assert.equal(state.relevant_examples.length, 20);
+            assert.equal(new Set(state.relevant_examples.map((example) => example.category)).size, 20);
+            assert.equal(Object.keys(request.questions.category.criteria).length, 21);
+            return Promise.resolve({
+                answers: {
+                    category: {
+                        choice: 'category_0',
+                        confidence: 1,
+                        probabilities: {
+                            ...Object.fromEntries(
+                                catalog.map((_, index) => [`category_${index}`, index === 0 ? 1 : 0]),
+                            ),
+                            none_of_the_above: 0,
+                        },
+                    },
+                },
+            });
+        },
+    };
+    await classifyTransaction({ payeeName: 'Shared Shop' }, catalog, { client, examples });
 });
