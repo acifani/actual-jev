@@ -1,6 +1,6 @@
 {
     "name": "actual-jev",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Categorize Actual Budget transactions with TypeSafe Jev",
     "author": "Alessandro Cifani <alessandro.cifani@gmail.com>",
     "license": "MIT",
