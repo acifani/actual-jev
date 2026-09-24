@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classifyTransaction, examplesPerCategoryFromEnv, type JevChoiceClient } from './classifier.js';
+import { classifyTransaction, type JevChoiceClient } from './classifier.js';
 
 const categories = [
     { id: 'food-id', name: 'Groceries', groupName: 'Food' },
@@ -230,17 +230,6 @@ void test('keeps history bounded and ignores irrelevant examples', async () => {
         client,
         examples,
     });
-});
-
-void test('configures examples per category from the environment', () => {
-    assert.equal(examplesPerCategoryFromEnv({}), 3);
-    assert.equal(examplesPerCategoryFromEnv({ ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY: '2' }), 2);
-    for (const raw of ['', '-1', '1.5', 'Infinity', '101', ' 2']) {
-        assert.throws(
-            () => examplesPerCategoryFromEnv({ ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY: raw }),
-            /ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY/,
-        );
-    }
 });
 
 void test('honors the per-category limit, including zero', async () => {

@@ -1,6 +1,6 @@
 {
     "name": "actual-jev",
-    "version": "0.1.0",
+    "version": "0.0.0",
     "description": "Categorize Actual Budget transactions with TypeSafe Jev",
     "type": "module",
     "packageManager": "pnpm@12.1.0",
@@ -20,18 +20,21 @@
     },
     "files": [
         "dist",
-        "README.md"
+        "README.md",
+        "docs",
+        ".env.example"
     ],
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "prepack": "pnpm build",
-        "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+        "start": "node --import tsx src/cli.ts",
         "test": "node --import tsx --test src/*.test.ts",
         "lint": "eslint src",
         "format": "prettier --write ."
     },
     "dependencies": {
         "@actual-app/api": "^26.9.0",
+        "@inquirer/prompts": "^8.7.2",
         "@inquirer/search": "^4.3.3",
         "@typesafe-ai/sdk": "^0.6.0"
     },

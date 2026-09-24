@@ -67,15 +67,6 @@ function exampleLimit(value: number, name: string): number {
     return value;
 }
 
-/** Parse the CLI's setting without reading process.env in library calls. */
-export function examplesPerCategoryFromEnv(env: Record<string, string | undefined>): number {
-    const name = 'ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY';
-    const raw = env[name];
-    if (raw === undefined) return 3;
-    if (!/^(0|[1-9]\d*)$/.test(raw)) throw new RangeError(`${name} must be an integer between 0 and 100`);
-    return exampleLimit(Number(raw), name);
-}
-
 function normalized(value?: string): string {
     return (value ?? '')
         .toLocaleLowerCase()

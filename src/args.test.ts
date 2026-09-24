@@ -4,12 +4,13 @@ import { parseArgs } from './args.js';
 
 void test('defaults to interactive and supports every option', () => {
     assert.deepEqual(parseArgs([]), {
+        command: 'run',
         mode: 'interactive',
         threshold: 0.9,
         account: undefined,
         from: undefined,
         to: undefined,
-        dataDir: '.actual-data',
+        dataDir: undefined,
         help: false,
     });
     assert.deepEqual(
@@ -28,6 +29,7 @@ void test('defaults to interactive and supports every option', () => {
             '-h',
         ]),
         {
+            command: 'run',
             mode: 'auto',
             threshold: 0,
             account: 'Checking',
@@ -53,7 +55,7 @@ void test('repeated value flags use their last value, but repeated modes are err
 });
 
 void test('validates values and unknown options even when help is requested', () => {
-    for (const flag of ['--threshold', '--account', '--from', '--to', '--data-dir']) {
+    for (const flag of ['--threshold', '--max-examples-per-category', '--account', '--from', '--to', '--data-dir']) {
         for (const tail of [[], [''], ['--help']]) {
             assert.throws(() => parseArgs([flag, ...tail]), /requires a value/);
         }
@@ -68,4 +70,23 @@ void test('validates values and unknown options even when help is requested', ()
     assert.throws(() => parseArgs(['--help', '--unknown']), /Unknown option/);
     // A short flag is accepted as a string value, matching the original parser.
     assert.equal(parseArgs(['--account', '-h']).account, '-h');
+});
+
+void test('supports setup, config show, and explicit environment files', () => {
+    assert.equal(parseArgs(['setup']).command, 'setup');
+    assert.equal(parseArgs(['setup', '--help']).help, true);
+    assert.equal(parseArgs(['config', 'show', '--env-file', '/tmp/test.env']).envFile, '/tmp/test.env');
+    assert.equal(parseArgs(['--env-file', '/tmp/test.env', '--dry-run']).mode, 'dry-run');
+    assert.throws(() => parseArgs(['--env-file']), /requires a value/);
+    assert.throws(() => parseArgs(['setup', '--auto']), /setup accepts/);
+    assert.throws(() => parseArgs(['config', 'show', '--auto']), /config show accepts/);
+    assert.throws(() => parseArgs(['config']), /Unknown option/);
+});
+
+void test('example limit is a per-run flag, including zero to disable history', () => {
+    assert.equal(parseArgs(['--max-examples-per-category', '0']).maxExamplesPerCategory, 0);
+    assert.equal(parseArgs(['--max-examples-per-category', '100']).maxExamplesPerCategory, 100);
+    for (const value of ['-1', '1.5', '101', 'NaN', 'Infinity']) {
+        assert.throws(() => parseArgs(['--max-examples-per-category', value]), /integer between 0 and 100/);
+    }
 });

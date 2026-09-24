@@ -1,75 +1,42 @@
 # actual-jev
 
-Suggest categories for uncategorized [Actual Budget](https://actualbudget.org/) transactions using [TypeSafe Jev](https://docs.typesafe.ai/sdk/javascript).
+Categorize uncategorized [Actual Budget](https://actualbudget.org/) transactions with [TypeSafe Jev](https://docs.typesafe.ai/sdk/javascript).
 
-## Setup
+## CLI
 
-Requires Node.js 24 (24.10 or newer), pnpm 12, an Actual Budget server, and a TypeSafe API key.
-
-```sh
-pnpm install
-cp -n .env.example .env
-```
-
-Fill in `.env` with your Actual server URL and password, TypeSafe API key, and the budget's sync ID from **Actual → Settings → Show advanced settings → Sync ID**. Set `ACTUAL_ENCRYPTION_PASSWORD` if your budget uses end-to-end encryption.
-
-## Usage
+Requires Node.js 24 (24.10 or newer), an Actual server, and a TypeSafe API key.
 
 ```sh
-pnpm start --dry-run                    # Preview automatic suggestions
-pnpm start                              # Choose a category or skip each transaction
-pnpm start --auto                       # Apply high-confidence suggestions
+actual-jev setup       # Connect to Actual, choose a budget, save credentials
+actual-jev --dry-run   # Preview suggestions without changing transactions
+actual-jev             # Review each suggestion and choose a category or skip
+actual-jev --auto      # Apply suggestions with confidence of at least 0.9
 ```
 
-Dry-run does not change transactions. Automatic mode applies suggestions with confidence of at least `0.9` by default; `--threshold` also controls dry-run previews. The tool considers uncategorized transactions in on-budget accounts, including uncategorized parts of split transactions, and skips internal transfers.
+Setup saves your settings locally, so the CLI works from any folder. Rerun `setup` to change them. `actual-jev config show` displays settings and storage paths with secrets hidden.
 
-Each prediction sends TypeSafe the transaction's payee, notes, amount, date, and account name when available, plus visible category names and notes and relevant previously categorized transactions. Automatic mode skips suggestions when a payee's history conflicts; interactive mode lets you choose.
+Use `--threshold` to change automatic confidence, `--account`, `--from`, and `--to` to narrow the scan, or `--max-examples-per-category 0` to omit historical examples. See `actual-jev --help` for all options.
 
-Set `ACTUAL_JEV_MAX_EXAMPLES_PER_CATEGORY=0` in `.env` to omit historical examples from predictions (default: `3` per relevant category).
+The CLI handles on-budget transactions and uncategorized split items, skips internal transfers, and leaves conflicting payee history for manual review in automatic mode. Predictions send TypeSafe transaction details, category names and notes, and relevant categorized history (up to three examples per category by default).
 
-Use `--account NAME_OR_ID`, `--from YYYY-MM-DD`, and `--to YYYY-MM-DD` to narrow the scan. Run `pnpm start --help` for all options.
+## Automation
 
-## Use from code
+Supply the connection settings in [.env.example](.env.example) as exported environment variables or an explicit environment file:
 
-Initialize both clients in your script, then give them to `ActualJev`. Its first classification loads categories and relevant history from the open Actual budget; call `refresh()` after the budget changes.
+```sh
+actual-jev --auto                   # Use exported variables
+actual-jev --env-file .env --auto    # Read variables from a file
+```
+
+Either uses environment configuration independently of saved setup. Supply all required connection settings; exported values override matching values in the file. Find your budget's sync ID under **Actual → Settings → Show advanced settings → Sync ID**.
+
+## Library
+
+Pass initialized Actual and TypeSafe clients to `ActualJev`:
 
 ```ts
-import * as actual from '@actual-app/api';
-import { TypeSafeClient } from '@typesafe-ai/sdk';
-import { ActualJev } from 'actual-jev';
-
-await actual.init({
-    serverURL: process.env.ACTUAL_SERVER_URL!,
-    password: process.env.ACTUAL_PASSWORD!,
-    dataDir: '.actual-data',
-});
-await actual.downloadBudget(process.env.ACTUAL_SYNC_ID!, {
-    password: process.env.ACTUAL_ENCRYPTION_PASSWORD,
-});
-const jev = new TypeSafeClient();
-
-try {
-    const classifier = new ActualJev({ actual, jev });
-    const result = await classifier.classify({ payee_name: 'Fresh Market', amount: -2350 });
-    console.log(result.categoryId, result.confidence);
-} finally {
-    await actual.shutdown();
-}
+const classifier = new ActualJev({ actual, jev });
+const result = await classifier.classify({ payee_name: 'Fresh Market', amount: -2350 });
 ```
 
-You can instead supply categories and examples without an Actual client:
-
-```ts
-import { TypeSafeClient } from '@typesafe-ai/sdk';
-import { ActualJev } from 'actual-jev';
-
-const jev = new TypeSafeClient();
-const classifier = new ActualJev({
-    jev,
-    categories: [{ id: 'groceries', name: 'Groceries', groupName: 'Food' }],
-    examples: [{ categoryId: 'groceries', payeeName: 'Fresh Market' }],
-});
-const result = await classifier.classify({ importedPayee: 'Fresh Market', amount: -2350 });
-```
-
-Classification returns a suggestion and never updates Actual.
+The library returns suggestions without updating Actual. See [library usage](docs/library.md) for complete examples, including supplying categories without an Actual server.
